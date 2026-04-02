@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Leetcode Rank Search Tool",
+  "description": "Search LeetCode contest rankings for a user ID and log the raw JSON.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Leetcode Rank Search Tool"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://leetcode.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://leetcode.com/contest/*"
+      ],
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
