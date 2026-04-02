@@ -7,6 +7,14 @@ const userListEl = document.getElementById('userList');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 
+const HISTORY_STORAGE_KEY = 'lookupHistory';
+const HISTORY_LIST_ID = 'userHistoryList';
+const HISTORY_MAX_ENTRIES = 50;
+const CACHE_STORAGE_PREFIX = 'lcContestRankingCache:';
+
+let lookupHistory = [];
+let historyListElement = null;
+
 let isRunning = false;
 let currentTabId = null;
 let activeLookupId = null;
@@ -29,6 +37,10 @@ function stripWrappingQuotes(value) {
 
 function sanitizeQueryInput(value) {
   return stripWrappingQuotes((value ?? '').trim());
+}
+
+function normalizeHistoryValue(value) {
+  return sanitizeQueryInput(value).toLowerCase();
 }
 
 function formatOriginLabel(value) {
@@ -136,6 +148,127 @@ function updateRemoveButtonStates() {
       btn.disabled = disableAll;
     }
   });
+}
+
+function ensureHistoryList() {
+  if (historyListElement) {
+    return historyListElement;
+  }
+  historyListElement = document.getElementById(HISTORY_LIST_ID);
+  return historyListElement;
+}
+
+function renderHistoryList() {
+  const listEl = ensureHistoryList();
+  if (!listEl) {
+    return;
+  }
+  listEl.innerHTML = '';
+  lookupHistory.forEach((entry) => {
+    const option = document.createElement('option');
+    option.value = entry;
+    listEl.appendChild(option);
+  });
+}
+
+function persistHistory() {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: lookupHistory }, () => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function addHistoryEntry(value) {
+  const sanitized = sanitizeQueryInput(value);
+  if (!sanitized) {
+    return false;
+  }
+  const normalized = normalizeHistoryValue(sanitized);
+  const existingIndex = lookupHistory.findIndex(
+    (entry) => normalizeHistoryValue(entry) === normalized
+  );
+  if (existingIndex === 0) {
+    return false;
+  }
+  if (existingIndex > 0) {
+    lookupHistory.splice(existingIndex, 1);
+  }
+  lookupHistory.unshift(sanitized);
+  if (lookupHistory.length > HISTORY_MAX_ENTRIES) {
+    lookupHistory.length = HISTORY_MAX_ENTRIES;
+  }
+  return true;
+}
+
+function updateHistory(values) {
+  let changed = false;
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (addHistoryEntry(values[index])) {
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return;
+  }
+  renderHistoryList();
+  persistHistory().catch((error) => {
+    console.error('Failed to persist lookup history:', error);
+  });
+}
+
+function loadHistory() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([HISTORY_STORAGE_KEY], (result) => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          console.error('Failed to load lookup history:', error);
+          resolve();
+          return;
+        }
+        const stored = result?.[HISTORY_STORAGE_KEY];
+        if (Array.isArray(stored)) {
+          const current = Array.isArray(lookupHistory) ? [...lookupHistory] : [];
+          const sanitized = stored
+            .map((value) => sanitizeQueryInput(value))
+            .filter(Boolean);
+          const combined = [...current, ...sanitized];
+          const unique = [];
+          const seen = new Set();
+          combined.forEach((entry) => {
+            const key = normalizeHistoryValue(entry);
+            if (key && !seen.has(key)) {
+              seen.add(key);
+              unique.push(entry);
+            }
+          });
+          lookupHistory = unique.slice(0, HISTORY_MAX_ENTRIES);
+        }
+        renderHistoryList();
+        resolve();
+      });
+    } catch (error) {
+      console.error('Failed to access lookup history:', error);
+      resolve();
+    }
+  });
+}
+
+function attachHistoryToInput(input) {
+  if (!input) {
+    return;
+  }
+  input.setAttribute('list', HISTORY_LIST_ID);
 }
 
 function resetRowStatus(rowObj) {
@@ -271,6 +404,7 @@ function addUserRow(value = '', focus = false) {
   input.className = 'user-input';
   input.placeholder = 'User ID or Name';
   input.value = value;
+  attachHistoryToInput(input);
   row.appendChild(input);
 
   const status = document.createElement('span');
@@ -373,13 +507,27 @@ async function sendMessageToTab(tabId, payload) {
 function clearStorage() {
   return new Promise((resolve, reject) => {
     try {
-      chrome.storage.local.clear(() => {
+      chrome.storage.local.get(null, (items) => {
         const error = chrome.runtime.lastError;
         if (error) {
           reject(error);
-        } else {
-          resolve();
+          return;
         }
+        const keysToRemove = Object.keys(items || {}).filter(
+          (key) => typeof key === 'string' && key.startsWith(CACHE_STORAGE_PREFIX)
+        );
+        if (!keysToRemove.length) {
+          resolve();
+          return;
+        }
+        chrome.storage.local.remove(keysToRemove, () => {
+          const removeError = chrome.runtime.lastError;
+          if (removeError) {
+            reject(removeError);
+          } else {
+            resolve();
+          }
+        });
       });
     } catch (error) {
       reject(error);
@@ -434,6 +582,7 @@ async function handleStartClick() {
   setStatus(`Searching for ${activeRows.length} user(s)...`);
   setProgress(0, null, 'starting');
   activeRows.forEach(setRowSearching);
+  updateHistory(activeRows.map((row) => row.value));
 
   try {
     await ensureContentScript(tab.id);
@@ -654,6 +803,7 @@ if (closeBtn) {
 }
 
 ensureAtLeastOneRow();
+loadHistory();
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'LOOKUP_PROGRESS') {
