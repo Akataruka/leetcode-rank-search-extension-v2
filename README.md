@@ -1,139 +1,139 @@
 # Leetcode Rank Search Tool 🏁
 
-Stop playing “click next page” whack‑a‑mole on LeetCode rankings. This extension drops a tiny agent into contest pages, streams the good bits back to a popup, and caches every page it touches so your subsequent lookups are instant. Think of it as your personal standings CLI, but in browser form. Also think of it as a glorified `curl | jq` pipeline with nicer buttons and zero bash scripts to maintain.
+> Because manually paging through rankings is the true boss fight of every contest.
+
+Welcome to the browser companion that lets you triage LeetCode standings like a backend service watching its logs: fast, cached, and oddly satisfying.
 
 ---
 
-## Why You Might Want It (a.k.a. the TL;DR table)
+## ⚡ TL;DR (For the caffeine-deprived)
 
-| Use Case | What the extension does for you |
+| Use Case | What the extension does |
 | --- | --- |
-| Track friends/teammates | Enter a pile of handles, hit Start, watch the bragging rights sort themselves out. |
-| Audit historical contests | Jump to an old contest and search without paging through 50 slow ranking screens. |
-| Monitor fresh results | Run it seconds after the contest ends; the agent pulls new data and caches it for replays. |
-| Avoid repeated API calls | Cache-first lookups means your second search is basically free (and fast). |
+| Track friends/teammates | Paste a list of handles, mash **Start**, collect bragging rights. |
+| Audit historical contests | Jump back in time without the “Next page… now wait” dance. |
+| Monitor fresh finishes | Run it right after the contest; cached snapshots stick around for replay. |
+| Save bandwidth/brain cells | Cache-first lookups mean repeated searches are basically instant. |
 
 ---
 
-## Feature Tour (with commentary)
+## 🧱 Feature Highlights (with opinionated commentary)
 
-- **Multi-user search:** Paste every handle from your team Slack channel. We fan out, page by page, until everyone is accounted for or the contest runs dry.
-- **Live progress bars:** Want to know if we’re hitting cache or the network? The popup tells you which page we’re on and where the data came from.
-- **Instant caching:** As soon as we touch a page, it’s cached, indexed, and ready for the next lookup—even if the user you wanted wasn’t on it yet.
-- **Smart refresh:** Cached data older than 15 minutes is marked as stale; we still reuse it instantly and quietly refresh pages in the background.
-- **Manual override:** `Start`, `Stop`, `Clear Cache`. Buttons you already know, with the behaviours you expect.
-- **Actionable results:** Every hit shows rank, page number, and a handy `View` link that dumps you into the right LeetCode page in a new tab.
-- **Zero-extension gymnastics:** Everything runs in-page; no mystery tabs, portals, or new windows. If Chrome blocks the popup, you’re probably in DevTools by accident.
-- **Autocomplete history:** Every lookup seeds a local history list so you get dropdown suggestions for frequent handles as you type.
+- **Multi-search input:** Throw in every username you care about—friends, rivals, that one person who always climbs 200 ranks in 10 minutes.
+- **Live telemetry:** The popup spells out which page we’re on, where the data came from (cache vs network), and who’s already been found.
+- **Instant caching:** Every page fetched is cached on contact and indexed for later. Even misses teach the cache new tricks.
+- **Smart freshness:** Anything older than 15 minutes is stamped as stale so you can decide whether to trust or re-run.
+- **Manual overrides:** `Start`, `Stop`, `Clear Cache`—because sometimes you really do want the big red button.
+- **Autocomplete history:** Recent queries bubble up in a dropdown, courtesy of `chrome.storage.local` and a datalist.
+- **Stay-in-place UX:** The popup never hijacks a new tab; if Chrome says otherwise you’re probably staring at DevTools instead of the contest.
 
 ---
 
-## Tech Specs at a Glance
+## 🔩 Tech Specs Cheat Sheet
 
 | Lever | Value |
 | --- | --- |
-| Runtime | Manifest V3, backgroundless popup/content duo |
-| Storage | `chrome.storage.local` with JSON payloads (contest cache + index) |
-| Network | Fetches `https://leetcode.com/contest/api/ranking/<slug>/` with your session cookies |
-| Caching | 15-minute freshness budget, 8-contest LRU-ish trimming |
+| Runtime | Manifest V3, popup + content script (no background service worker) |
+| Storage | `chrome.storage.local` (contest cache + lookup history) |
+| Network | `https://leetcode.com/contest/api/ranking/<slug>/` with your authenticated session |
+| Caching | 15-minute freshness cap, 8-contest retention, incremental writes |
 | Messaging | `START_LOOKUP`, `STOP_LOOKUP`, `LOOKUP_PROGRESS`, `LOOKUP_RESULT` |
 
-When in doubt, search `CONFIG` inside `contentScript.js`; all the tweakable bits live in one place.
+All tweakables live under `CONFIG` in `contentScript.js`. Change them there, not in ten scattered files.
 
 ---
 
-## How It Works (Architecture, no whiteboard required)
+## 🧠 Architecture Crash Course
 
-1. **Popup (`popup.html` / `popup.js`)**  
-   - Renders the UI, collects user inputs, and displays progress/results.  
-   - Sends `START_LOOKUP` and `STOP_LOOKUP` messages to the active contest tab.  
-   - Receives `LOOKUP_PROGRESS` and `LOOKUP_RESULT` messages and updates the UI in real time.
+1. **Popup (`popup.html` / `popup.js`)**
+   - Owns the UI, sanitises inputs, manages lookup state, persists query history.
+   - Sends `START_LOOKUP` / `STOP_LOOKUP` to the active contest tab.
+   - Streams progress + results back into the user rows.
 
-2. **Content Script (`contentScript.js`)**  
-   - Runs inside contest pages.  
-   - Derives the contest slug, orchestrates page fetches, and caches every page it touches.  
-   - Maintains an index keyed by normalized user identifiers so cached lookups don’t rescan pages.  
-   - Emits progress + result messages back to the popup.
+2. **Content Script (`contentScript.js`)**
+   - Boots on contest pages, figures out the contest slug, and orchestrates pagination.
+   - Writes freshly fetched pages into cache immediately and maintains a quick-lookup index.
+   - Emits progress events so the popup can stay smugly informative.
 
- 3. **Manifest (`manifest.json`)**  
-    - Declares permissions (`activeTab`, `tabs`, `scripting`, `storage`) and wires the popup/content script.  
-    - Targets `https://leetcode.com/contest/*` so the helper only runs on contest pages.
-
-If you prefer a pseudo-diagram:
+3. **Manifest (`manifest.json`)**
+   - Grants `activeTab`, `tabs`, `scripting`, `storage`.
+   - Restricts the content script to `https://leetcode.com/contest/*`.
 
 ```
 Popup UI ── sendMessage ──▶ Content Script
    ▲                          │
-   │                          ├─ fetch() contest pages (with AbortController)
-   │                          ├─ merge pages into cache + index
-   └─◀─ receive progress/results ───┘
+   │                          ├─ fetch() pages (AbortController guarded)
+   │                          ├─ cache + index merge
+   └─◀─ progress/results ─────┘
 ```
 
 ---
 
-## Getting Started (Developers’ edition)
+## 🛠️ Install & Fire It Up
 
-1. **Install Locally**
-   1. Clone or download this repository.
-   2. Open Chrome (or any Chromium-based browser) and visit `chrome://extensions/`.
-   3. Enable **Developer mode** (top-right toggle).
-   4. Click **Load unpacked** and select the project directory.
-   5. Pin the extension for faster access if desired.
+1. Clone/download this repo.
+2. Visit `chrome://extensions/`, flip the **Developer mode** toggle.
+3. Click **Load unpacked** and pick the project folder.
+4. Pin the extension if you want one-click glory.
+5. Open a contest ranking page and click the icon to launch the popup.
+6. Paste handles ➡️ hit **Start** ➡️ watch results stream in.
 
-2. **Run a Lookup**
-   1. Open a LeetCode contest ranking page, e.g. `https://leetcode.com/contest/weekly-contest-xyz/ranking/`.
-   2. Click the extension icon to open the popup.
-   3. Add user IDs or display names. Quotes and extra whitespace are stripped automatically.
-   4. Hit **Start**. Progress updates appear as each page is scanned.
-   5. Results show the page number, rank, the matched name/ID, and a link to open the contest page in a new tab.
-   6. Use **Stop** to cancel mid-search or **Clear Cache** to force a fresh crawl.
+Need to bail out mid-run? Smash **Stop**. Want a pristine crawl? **Clear Cache** only wipes contest data—your lookup history stays for autocomplete goodness.
 
 ---
 
-## Behind the Scenes
+## 🔍 Implementation Details Worth Knowing
 
-- **Single Lookup at a Time** – An internal `AbortController` ensures only one lookup runs per contest tab; starting a new lookup cancels the previous one.
-- **Immediate Cache Writes** – As soon as a page is fetched, the extension merges it into the cached contest data so future searches reuse it even if no match was found yet.
-- **Lookup History** – The popup keeps the last 50 sanitized handles in `chrome.storage.local`, serving them back as autocomplete options without retyping.
-- **Cache Policy** – Cache entries are keyed by contest slug + region (`global_v2`). By default the cache keeps the last 15 minutes of results and trims to the eight most recent contests. Tune `CACHE_MAX_AGE_MS` or `CACHE_MAX_CONTESTS` in `contentScript.js` to adjust behaviour.
-- **Messaging** – The popup and content script communicate via `chrome.runtime.sendMessage`. Progress messages include page numbers, known totals, origin (`cache`, `cache-stale`, or `network`), and completion state.
-- **Network Calls** – Fetches hit the public contest ranking API (`/contest/api/ranking/<slug>/`). Because requests rely on your logged-in session, make sure you can view rankings in the browser.
+- **Single concurrency path:** An internal `AbortController` cancels any previous lookup before the next one begins.
+- **Cache entries:** Keyed by `CONFIG.CACHE_PREFIX + slug + region`. Payload stores pages, metadata, and an index of known users.
+- **Incremental writes:** As soon as a page lands, it’s reconciled into cache—no “found a user” prerequisite.
+- **Lookup history:** Last 50 sanitized handles are deduped and stored locally; the popup keeps them alphabet soup-free.
+- **Pruning policy:** 8 most recent contests plus anything younger than 15 minutes survive; the rest are humanely deleted.
+- **Progress pulse:** Each `LOOKUP_PROGRESS` includes the page number, total pages (if known), the data origin, and completion state.
 
-Need to trace the cache logic quickly? Drop a breakpoint in `saveContestCache` (around `contentScript.js:340`) and watch the merge pipeline turn raw API payloads into indexed snapshots.
+Debugging the pipeline? Set a breakpoint in `saveContestCache` (around `contentScript.js:340`) and watch how pages become neat little indexed blobs.
 
 ---
 
-## Troubleshooting Tips
+## 🧪 Run-Loop Checklist (aka “did it work?”)
 
-| Symptom | Try this |
+- `Start` lights up rows with spinners, `Stop` flips them to “Stopped.” ✅
+- Cache hits shout out “Cache” in the progress bar, stale ones say “Cache (stale).” ✅
+- Re-running a recent search should autocomplete via the dropdown. ✅
+- Hitting **Clear Cache** invalidates contest data but keeps your history list intact. ✅
+
+---
+
+## 🆘 Troubleshooting Matrix
+
+| Symptom | Fix |
 | --- | --- |
-| “Open a LeetCode contest page” error | Make sure the active tab is a contest ranking page before starting the lookup. |
-| Users show as “Not found” | Verify the exact LeetCode username/display name. Try both the slug (e.g. `john-doe`) and display name capitalization. |
-| Results feel stale | Click **Clear Cache** in the popup to wipe local storage and re-fetch the latest rankings. |
-| Lookup stalls or fails | Ensure you’re logged into LeetCode and have access to the contest rankings. Network hiccups will surface as errors in the status bar. |
+| “Open a LeetCode contest page” warning | Switch the active tab to a contest ranking first. |
+| All users return “Not found” | Double-check usernames (display vs slug) and confirm you can see the rankings manually. |
+| Results feel ancient | Tap **Clear Cache** or wait for the background refresh to finish; stale cache entries are labelled. |
+| Spinner never stops | Ensure you’re logged into LeetCode. Network hiccups show up as warnings in the status badge. |
 
 ---
 
-## Customising & Extending
+## 🧩 Customize to Taste
 
-- **Regions** – Change `CONFIG.REGION` in `contentScript.js` (`global_v2` by default) to target other LeetCode regions.
-- **Cache Policy** – Adjust `CACHE_MAX_AGE_MS` and `CACHE_MAX_CONTESTS` in `CONFIG` to keep data longer or trim more aggressively.
-- **UI Tweaks** – Update `popup.html` / `popup.js` for styling or new controls. The popup listens for progress and result events; augment handlers in `popup.js` to add new behaviours.
-- **Code Structure** – `contentScript.js` is organised by responsibilities (utilities, storage, caching, messaging, lookup). Each section can be modified independently without cross-cutting changes.
-- **Logging Hooks** – Flip `CONFIG.DEBUG_TOASTS` (look for the `logDebug` helper) to surface toasts in the popup while you hack.
-- **Testing in Bulk** – Keep a list of handles in a `.txt` file and paste them in one go; the input pipeline trims whitespace, dedupes, and lowercases display names for consistent matching.
-
----
-
-## Dev Debug Cheatsheet
-
-- Run `chrome.storage.local.get(null, console.log)` in the contest tab console to peek at the cache payload.
-- Use the popup’s **Clear Cache** button between test runs; it wipes storage and resets the in-memory index.
-- Inspect network waterfall for `/contest/api/ranking/` requests to confirm the abort behaviour and caching hits.
-- Add `?page=42` to ranking URLs while testing— the content script recomputes pagination boundaries automatically.
+- **Region swaps:** Change `CONFIG.REGION` to `us`, `cn`, etc.
+- **Cache appetite:** Tweak `CACHE_MAX_AGE_MS` and `CACHE_MAX_CONTESTS` for different retention policies.
+- **UI flair:** Edit `popup.html` / `popup.js`—the event wiring is already compartmentalised.
+- **Debug toasts:** Toggle `CONFIG.DEBUG_TOASTS` and use the `logDebug` helper.
+- **Bulk test runs:** Keep a `.txt` list of handles nearby; the input pipeline trims, dedupes, and normalises on the fly.
 
 ---
 
-## License
+## 🧰 Dev Console Tricks
 
-This project is provided as-is for personal use. Add a formal license if you plan to distribute or commercialise the tool. Contributions and forks are welcome—just keep the cache-friendly behaviour intact so everyone enjoys fast lookups!
+- `chrome.storage.local.get(null, console.log)` (contest tab) to inspect cache payloads.
+- Use the popup’s **Clear Cache** button between experiments; it prunes contest entries but preserves lookup history.
+- Add `?page=42` to ranking URLs when testing pagination logic—the content script recalculates bounds automatically.
+- Check the Network panel for `/contest/api/ranking/` requests to confirm the abort behaviour is doing its job.
+
+---
+
+## 📜 License
+
+Provided as-is for personal use. If you plan to ship this beyond your friend group, slap on a proper license and keep the cache-friendly behaviour intact so everyone enjoys fast lookups (and fewer page clicks).
